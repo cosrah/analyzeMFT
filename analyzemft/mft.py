@@ -25,6 +25,7 @@ def parse_record(raw_record, options):
         'notes': '',
         'ads': 0,
         'datacnt': 0,
+        'attribute_list': []
     }
 
     decode_mft_header(record, raw_record)
@@ -32,12 +33,13 @@ def parse_record(raw_record, options):
     # HACK: Apply the NTFS fixup on a 1024 byte record.
     # Note that the fixup is only applied locally to this function.
     if record['seq_number'] == raw_record[510:512] and record['seq_number'] == raw_record[1022:1024]:
-        raw_record = "%s%s%s%s" % (
-            raw_record[:510],
-            record['seq_attr1'],
-            raw_record[512:1022],
-            record['seq_attr2'],
-        )
+        #raw_record = "%s%s%s%s" % (
+        #    raw_record[:510],
+        #    record['seq_attr1'],
+        #    raw_record[512:1022],
+        #    record['seq_attr2'],
+        #)
+        raw_record = raw_record[:510] + record['seq_attr1'] + raw_record[512:1022] + record['seq_attr2']
 
     record_number = record['recordnum']
 
@@ -78,10 +80,12 @@ def parse_record(raw_record, options):
         else:
             atr_record['name'] = ''
 
+        atr_data = raw_record[read_ptr + atr_record['soff'] : read_ptr + atr_record['soff'] + atr_record['ssize ']]
+
         if options.debug:
             print("Attribute type: %x Length: %d Res: %x" % (atr_record['type'], atr_record['len'], atr_record['res']))
 
-        if atr_record['type'] == 0x10:  # Standard Information
+        if atr_record['type'] == 0x10:  # Standard Information : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/standard_information.html
             if options.debug:
                 print("Stardard Information:\n++Type: %s Length: %d Resident: %s Name Len:%d Name Offset: %d" % (
                     hex(int(atr_record['type'])),
@@ -100,7 +104,7 @@ def parse_record(raw_record, options):
                     si_record['ctime'].dtstr,
                 ))
 
-        elif atr_record['type'] == 0x20:  # Attribute list
+        elif atr_record['type'] == 0x20:  # Attribute list : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/attribute_list.html
             if options.debug:
                 print("Attribute list")
             if atr_record['res'] == 0:
@@ -113,7 +117,7 @@ def parse_record(raw_record, options):
                     print("Non-resident Attribute List?")
                 record['al'] = None
 
-        elif atr_record['type'] == 0x30:  # File name
+        elif atr_record['type'] == 0x30:  # File name : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/file_name.html
             if options.debug:
                 print("File name record")
             fn_record = decode_fn_attribute(raw_record[read_ptr + atr_record['soff']:], options.localtz, record)
@@ -130,29 +134,41 @@ def parse_record(raw_record, options):
                         fn_record['ctime'].dtstr,
                     ))
 
-        elif atr_record['type'] == 0x40:  # Object ID
+        elif atr_record['type'] == 0x40:  # Object ID : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/object_id.html
             object_id_record = decode_object_id(raw_record[read_ptr + atr_record['soff']:])
             record['objid'] = object_id_record
             if options.debug:
                 print("Object ID")
 
-        elif atr_record['type'] == 0x50:  # Security descriptor
+        elif atr_record['type'] == 0x50:  # Security descriptor : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/security_descriptor.html
             record['sd'] = True
             if options.debug:
                 print("Security descriptor")
+            sd_hdr = {
+                'revision': struct.unpack('B', atr_data[0:1])[0],
+                # padding
+                'control_flags': struct.unpack('<H', atr_data[2:4])[0],
+                'user_sid_off': struct.unpack('<L', atr_data[4:8])[0],
+                'group_sid_off': struct.unpack('<L', atr_data[8:12])[0],
+                'sacl_off': struct.unpack('<L', atr_data[12:16])[0],
+                'dacl_off': struct.unpack('<L', atr_data[16:20])[0],
 
-        elif atr_record['type'] == 0x60:  # Volume name
+            }
+            record['sd_hdr'] = sd_hdr
+
+        elif atr_record['type'] == 0x60:  # Volume name : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/volume_name.html
             record['volname'] = True
             if options.debug:
                 print("Volume name")
+            record['volname_value'] = atr_data.decode('utf-16')
 
-        elif atr_record['type'] == 0x70:  # Volume information
+        elif atr_record['type'] == 0x70:  # Volume information : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/volume_information.html
             if options.debug:
                 print("Volume info attribute")
             volume_info_record = decode_volume_info(raw_record[read_ptr + atr_record['soff']:], options)
             record['volinfo'] = volume_info_record
 
-        elif atr_record['type'] == 0x80:  # Data
+        elif atr_record['type'] == 0x80:  # Data : http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/attributes/data.html
             if atr_record['name'] != '':
                 record['data_name', record['ads']] = atr_record['name']
                 record['ads'] += 1
@@ -220,9 +236,15 @@ def parse_record(raw_record, options):
             if options.debug:
                 print("ATRrecord->len < 0, exiting loop")
             break
+        
+        record['attribute_list'].append(atr_record)
 
     if options.anomaly:
         anomaly_detect(record)
+
+    record['record_type'] = decode_mft_recordtype(record)
+    record['magic_name'] = decode_mft_magic(record)
+    record['is_active'] = decode_mft_isactive(record)
 
     return record
 
@@ -595,20 +617,40 @@ def decode_mft_recordtype(record):
 
 
 def decode_atr_header(s):
+    atr_name_map = {
+        0x10	: "$STANDARD_INFORMATION",
+        0x20	: "$ATTRIBUTE_LIST",
+        0x30	: "$FILE_NAME",
+        0x40	: "$OBJECT_ID",
+        0x50	: "$SECURITY_DESCRIPTOR",
+        0x60	: "$VOLUME_NAME",
+        0x70	: "$VOLUME_INFORMATION",
+        0x80	: "$DATA",
+        0x90	: "$INDEX_ROOT",
+        0xA0	: "$INDEX_ALLOCATION",
+        0xB0	: "$BITMAP",
+        0xC0	: "$REPARSE_POINT",
+        0xD0	: "$EA_INFORMATION",
+        0xE0	: "$EA",
+        0xF0	: "$PROPERTY_SET",
+        0x100	: "$LOGGED_UTILITY_STREAM"
+    }
+
     d = {'type': struct.unpack("<L", s[:4])[0]}
     if d['type'] == 0xffffffff:
         return d
+    d['type_name'] = atr_name_map[d['type']] if d['type'] in atr_name_map else f"Unknown:{d['type']}"
     d['len'] = struct.unpack("<L", s[4:8])[0]
-    d['res'] = struct.unpack("B", s[8])[0]
-    d['nlen'] = struct.unpack("B", s[9])[0]
+    d['res'] = struct.unpack("B", s[8:9])[0]
+    d['nlen'] = struct.unpack("B", s[9:10])[0]
     d['name_off'] = struct.unpack("<H", s[10:12])[0]
     d['flags'] = struct.unpack("<H", s[12:14])[0]
     d['id'] = struct.unpack("<H", s[14:16])[0]
     if d['res'] == 0:
         d['ssize'] = struct.unpack("<L", s[16:20])[0]  # dwLength
         d['soff'] = struct.unpack("<H", s[20:22])[0]  # wAttrOffset
-        d['idxflag'] = struct.unpack("B", s[22])[0]  # uchIndexedTag
-        _ = struct.unpack("B", s[23])[0]  # Padding
+        d['idxflag'] = struct.unpack("B", s[22:23])[0]  # uchIndexedTag
+        _ = struct.unpack("B", s[23:24])[0]  # Padding
     else:
         # d['start_vcn'] = struct.unpack("<Lxxxx",s[16:24])[0]    # n64StartVCN
         # d['last_vcn'] = struct.unpack("<Lxxxx",s[24:32])[0]     # n64EndVCN
@@ -650,7 +692,7 @@ def unpack_dataruns(datarun_str):
     # mftutils.hexdump(str,':',16)
 
     while True:
-        lengths.asbyte = struct.unpack("B", datarun_str[pos])[0]
+        lengths.asbyte = struct.unpack("B", datarun_str[pos : pos+1])[0]
         pos += 1
         if lengths.asbyte == 0x00:
             break
@@ -687,11 +729,36 @@ def decode_si_attribute(s, localtz):
         'mtime': mftutils.WindowsTime(struct.unpack("<L", s[8:12])[0], struct.unpack("<L", s[12:16])[0], localtz),
         'ctime': mftutils.WindowsTime(struct.unpack("<L", s[16:20])[0], struct.unpack("<L", s[20:24])[0], localtz),
         'atime': mftutils.WindowsTime(struct.unpack("<L", s[24:28])[0], struct.unpack("<L", s[28:32])[0], localtz),
-        'dos': struct.unpack("<I", s[32:36])[0], 'maxver': struct.unpack("<I", s[36:40])[0],
-        'ver': struct.unpack("<I", s[40:44])[0], 'class_id': struct.unpack("<I", s[44:48])[0],
-        'own_id': struct.unpack("<I", s[48:52])[0], 'sec_id': struct.unpack("<I", s[52:56])[0],
-        'quota': struct.unpack("<d", s[56:64])[0], 'usn': struct.unpack("<d", s[64:72])[0],
+        'dos': struct.unpack("<I", s[32:36])[0],
+        'maxver': struct.unpack("<I", s[36:40])[0],
+        'ver': struct.unpack("<I", s[40:44])[0],
+        'class_id': struct.unpack("<I", s[44:48])[0],
+        'own_id': struct.unpack("<I", s[48:52])[0],
+        'sec_id': struct.unpack("<I", s[52:56])[0],
+        'quota': struct.unpack("<d", s[56:64])[0],
+        'usn': struct.unpack("<d", s[64:72])[0],
     }
+
+    file_permission = {
+        0x0001:	"Read-Only",
+        0x0002:	"Hidden",
+        0x0004:	"System",
+        0x0020:	"Archive",
+        0x0040:	"Device",
+        0x0080:	"Normal",
+        0x0100:	"Temporary",
+        0x0200:	"Sparse File",
+        0x0400:	"Reparse Point",
+        0x0800:	"Compressed",
+        0x1000:	"Offline",
+        0x2000:	"Not Content Indexed",
+        0x4000:	"Encrypted"
+    }
+
+    d['dos_file_permission'] = []
+    for perm_value, perm_name in file_permission.items():
+        if d['dos'] & perm_value:
+            d['dos_file_permission'].append(perm_name)
 
     return d
 
@@ -700,14 +767,17 @@ def decode_fn_attribute(s, localtz, _):
     # File name attributes can have null dates.
 
     d = {
-        'par_ref': struct.unpack("<Lxx", s[:6])[0], 'par_seq': struct.unpack("<H", s[6:8])[0],
+        'par_ref': struct.unpack("<Lxx", s[:6])[0],
+        'par_seq': struct.unpack("<H", s[6:8])[0],
         'crtime': mftutils.WindowsTime(struct.unpack("<L", s[8:12])[0], struct.unpack("<L", s[12:16])[0], localtz),
         'mtime': mftutils.WindowsTime(struct.unpack("<L", s[16:20])[0], struct.unpack("<L", s[20:24])[0], localtz),
         'ctime': mftutils.WindowsTime(struct.unpack("<L", s[24:28])[0], struct.unpack("<L", s[28:32])[0], localtz),
         'atime': mftutils.WindowsTime(struct.unpack("<L", s[32:36])[0], struct.unpack("<L", s[36:40])[0], localtz),
-        'alloc_fsize': struct.unpack("<q", s[40:48])[0], 'real_fsize': struct.unpack("<q", s[48:56])[0],
-        'flags': struct.unpack("<d", s[56:64])[0], 'nlen': struct.unpack("B", s[64])[0],
-        'nspace': struct.unpack("B", s[65])[0],
+        'alloc_fsize': struct.unpack("<q", s[40:48])[0],
+        'real_fsize': struct.unpack("<q", s[48:56])[0],
+        'flags': struct.unpack("<d", s[56:64])[0],
+        'nlen': struct.unpack("B", s[64:65])[0],
+        'nspace': struct.unpack("B", s[65:66])[0],
     }
 
     attr_bytes = s[66:66 + d['nlen'] * 2]
@@ -721,10 +791,14 @@ def decode_fn_attribute(s, localtz, _):
 
 def decode_attribute_list(s, _):
     d = {
-        'type': struct.unpack("<I", s[:4])[0], 'len': struct.unpack("<H", s[4:6])[0],
-        'nlen': struct.unpack("B", s[6])[0], 'f1': struct.unpack("B", s[7])[0],
-        'start_vcn': struct.unpack("<d", s[8:16])[0], 'file_ref': struct.unpack("<Lxx", s[16:22])[0],
-        'seq': struct.unpack("<H", s[22:24])[0], 'id': struct.unpack("<H", s[24:26])[0],
+        'type': struct.unpack("<I", s[:4])[0],
+        'len': struct.unpack("<H", s[4:6])[0],
+        'nlen': struct.unpack("B", s[6:7])[0],
+        'f1': struct.unpack("B", s[7:8])[0],
+        'start_vcn': struct.unpack("<d", s[8:16])[0],
+        'file_ref': struct.unpack("<Lxx", s[16:22])[0],
+        'seq': struct.unpack("<H", s[22:24])[0],
+        'id': struct.unpack("<H", s[24:26])[0],
     }
 
     attr_bytes = s[26:26 + d['nlen'] * 2]
@@ -735,8 +809,10 @@ def decode_attribute_list(s, _):
 
 def decode_volume_info(s, options):
     d = {
-        'f1': struct.unpack("<d", s[:8])[0], 'maj_ver': struct.unpack("B", s[8])[0],
-        'min_ver': struct.unpack("B", s[9])[0], 'flags': struct.unpack("<H", s[10:12])[0],
+        'f1': struct.unpack("<d", s[:8])[0],
+        'maj_ver': struct.unpack("B", s[8:9])[0],
+        'min_ver': struct.unpack("B", s[9:10])[0],
+        'flags': struct.unpack("<H", s[10:12])[0],
         'f2': struct.unpack("<I", s[12:16])[0],
     }
 

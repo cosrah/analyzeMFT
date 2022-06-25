@@ -36,7 +36,8 @@ class MftSession:
         return date_str
 
 
-    def __init__(self):
+    def __init__(self, filepath=None):
+        if filepath: self.filepath = filepath
         self.mft = {}
         self.fullmft = {}
         self.folders = {}
@@ -46,7 +47,8 @@ class MftSession:
     def mft_options(self):
 
         parser = OptionParser()
-        parser.set_defaults(inmemory=False, debug=False, UseLocalTimezone=False, UseGUI=False)
+        #parser.set_defaults(inmemory=False, debug=False, UseLocalTimezone=False, UseGUI=False)
+        parser.set_defaults(inmemory=False, debug=True, UseLocalTimezone=False, UseGUI=False)
 
         parser.add_option("-v", "--version", action="store_true", dest="version",
                           help="report version and exit")
@@ -104,7 +106,8 @@ class MftSession:
         
         (self.options, args) = parser.parse_args()
 
-        self.path_sep = '\\' if self.options.winpath else '/'
+        # self.path_sep = '\\' if self.options.winpath else '/'
+        self.path_sep = b'\\' if self.options.winpath else b'/'
 
         if self.options.excel:
             self.options.date_formatter = MftSession.fmt_excel
@@ -118,23 +121,26 @@ class MftSession:
             print(("Version is: %s" % VERSION))
             sys.exit()
 
-        if self.options.filename is None:
+        if self.filepath is None and self.options.filename is None:
             print("-f <filename> required.")
             sys.exit()
+        elif self.options.filename is not None:
+            self.filepath = self.options.filename
 
         # if self.options.output == None and self.options.bodyfile == None and self.options.csvtimefile == None:
         #     print "-o <filename> or -b <filename> or -c <filename> required."
         #     sys.exit()
 
         try:
-            self.file_mft = open(self.options.filename, 'rb')
+            self.file_mft = open(self.filepath, 'rb')
         except:
-            print("Unable to open file: %s" % self.options.filename)
+            print(f"Unable to open file: {self.filepath}")
             sys.exit()
 
         if self.options.output is not None:
             try:
-                self.file_csv = csv.writer(open(self.options.output, 'wb'), dialect=csv.excel, quoting=1)
+                #self.file_csv = csv.writer(open(self.options.output, 'wb'), dialect=csv.excel, quoting=1)
+                self.file_csv = csv.writer(open(self.options.output, 'w'), dialect=csv.excel, quoting=1)
             except (IOError, TypeError):
                 print("Unable to open file: %s" % self.options.output)
                 sys.exit()
@@ -158,7 +164,7 @@ class MftSession:
     def sizecheck(self):
 
         # The number of records in the MFT is the size of the MFT / 1024
-        self.mftsize = int(os.path.getsize(self.options.filename)) / 1024
+        self.mftsize = int(os.path.getsize(self.filepath)) / 1024
 
         if self.options.debug:
             print('There are %d records in the MFT' % self.mftsize)
@@ -211,7 +217,11 @@ class MftSession:
                 for i in range(0, record['ads']):
                     #                         print "ADS: %s" % (record['data_name', i])
                     record_ads = record.copy()
-                    record_ads['filename'] = record['filename'] + ':' + record['data_name', i]
+                    # record_ads['filename'] = record['filename'] + ':' + record['data_name', i]
+                    record_ads['filename'] = b':'.join([
+                        record['filename'] if type(record['filename']) == bytes else record['filename'].encode(),
+                        record['data_name', i] if type(record['data_name', i]) == bytes else record['data_name', i].encode()
+                    ])
                     self.do_output(record_ads)
 
             raw_record = self.file_mft.read(1024)
@@ -229,11 +239,7 @@ class MftSession:
             with open(self.options.json, 'a') as outfile:
                 json.dump(mft.mft_to_json(record), outfile)
                 outfile.write('\n')
-            
-        
- 
-    
-            
+          
         if self.options.csvtimefile is not None:
             self.file_csv_time.write(mft.mft_to_l2t(record))
 
@@ -276,7 +282,8 @@ class MftSession:
 
         # 1024 is valid for current version of Windows but should really get this value from somewhere
         raw_record = self.file_mft.read(1024)
-        while raw_record != "":
+        # while raw_record != "":
+        while raw_record != b"":
             minirec = {}
             record = mft.parse_record(raw_record, self.options)
             if self.options.debug:
@@ -313,7 +320,7 @@ class MftSession:
             print("Building Folder For Record Number (%d)" % seqnum)
 
         if seqnum not in self.mft:
-            return 'Orphan'
+            return b'Orphan'
 
         # If we've already figured out the path name, just return it
         if (self.mft[seqnum]['filename']) != '':
@@ -327,14 +334,14 @@ class MftSession:
                 self.mft[seqnum]['filename'] = self.path_sep + self.mft[seqnum]['name']
                 return self.mft[seqnum]['filename']
         except:  # If there was an error getting the parent's sequence number, then there is no FN record
-            self.mft[seqnum]['filename'] = 'NoFNRecord'
+            self.mft[seqnum]['filename'] = b'NoFNRecord'
             return self.mft[seqnum]['filename']
 
         # Self referential parent sequence number. The filename becomes a NoFNRecord note
         if (self.mft[seqnum]['par_ref']) == seqnum:
             if self.debug:
                 print("Error, self-referential, while trying to determine path for seqnum %s" % seqnum)
-            self.mft[seqnum]['filename'] = 'ORPHAN' + self.path_sep + self.mft[seqnum]['name']
+            self.mft[seqnum]['filename'] = b'ORPHAN' + self.path_sep + self.mft[seqnum]['name']
             return self.mft[seqnum]['filename']
 
         # We're not at the top of the tree and we've not hit an error
@@ -361,4 +368,4 @@ class MftSession:
                     if self.debug:
                         print("Filename (with path): %s" % self.mft[i]['filename'])
                 else:
-                    self.mft[i]['filename'] = 'NoFNRecord'
+                    self.mft[i]['filename'] = b'NoFNRecord'
