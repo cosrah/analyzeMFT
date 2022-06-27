@@ -292,16 +292,15 @@ class MftSession:
             minirec['filename'] = record['filename']
             minirec['fncnt'] = record['fncnt']
             if record['fncnt'] == 1:
-                minirec['par_ref'] = record['fn', 0]['par_ref']
-                minirec['name'] = record['fn', 0]['name']
+                minirec['par_ref'] = record['fn'][0]['par_ref']
+                minirec['name'] = record['fn'][0]['name']
             if record['fncnt'] > 1:
-                minirec['par_ref'] = record['fn', 0]['par_ref']
+                minirec['par_ref'] = record['fn'][0]['par_ref']
                 for i in (0, record['fncnt'] - 1):
-                    # print record['fn',i]
-                    if record['fn', i]['nspace'] == 0x1 or record['fn', i]['nspace'] == 0x3:
-                        minirec['name'] = record['fn', i]['name']
+                    if record['fn'][i]['nspace'] == 0x1 or record['fn'][i]['nspace'] == 0x3:
+                        minirec['name'] = record['fn'][i]['name']
                 if minirec.get('name') is None:
-                    minirec['name'] = record['fn', record['fncnt'] - 1]['name']
+                    minirec['name'] = record['fn'][record['fncnt'] - 1]['name']
 
             self.mft[self.num_records] = minirec
 

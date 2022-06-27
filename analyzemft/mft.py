@@ -18,7 +18,6 @@ from optparse import OptionParser
 from . import bitparse
 from . import mftutils
 
-
 def parse_record(raw_record, options):
     record = {
         'filename': '',
@@ -80,7 +79,9 @@ def parse_record(raw_record, options):
         else:
             atr_record['name'] = ''
 
-        atr_data = raw_record[read_ptr + atr_record['soff'] : read_ptr + atr_record['soff'] + atr_record['ssize ']]
+        atr_data = None
+        if 'soff' in atr_record and 'ssize' in atr_record:
+            atr_data = raw_record[read_ptr + atr_record['soff'] : read_ptr + atr_record['soff'] + atr_record['ssize']]
 
         if options.debug:
             print("Attribute type: %x Length: %d Res: %x" % (atr_record['type'], atr_record['len'], atr_record['res']))
@@ -121,7 +122,13 @@ def parse_record(raw_record, options):
             if options.debug:
                 print("File name record")
             fn_record = decode_fn_attribute(raw_record[read_ptr + atr_record['soff']:], options.localtz, record)
-            record['fn', record['fncnt']] = fn_record
+
+            if 'fn' not in record: record['fn'] = [fn_record]
+            else: record['fn'].append(fn_record)
+
+            record['fsize_alloc'] = fn_record['alloc_fsize']
+            record['fsize_real'] = fn_record['real_fsize']
+
             if options.debug:
                 print("Name: %s (%d)" % (fn_record['name'], record['fncnt']))
             record['fncnt'] += 1
@@ -180,7 +187,10 @@ def parse_record(raw_record, options):
                     'dataruns': atr_record['dataruns'],
                     'drunerror': atr_record['drunerror'],
                 }
-            record['data', record['datacnt']] = data_attribute
+            
+            if 'data' not in record: record['data'] = [data_attribute]
+            else: record['data'].append(data_attribute)
+
             record['datacnt'] += 1
 
             if options.debug:

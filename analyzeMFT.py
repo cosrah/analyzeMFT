@@ -2,7 +2,7 @@
 
 try:
     from analyzemft import mftsession
-except:
+except Exception as e:
     from .analyzemft import mftsession
 
 if __name__ == "__main__":
@@ -10,3 +10,4 @@ if __name__ == "__main__":
     session.mft_options()
     session.open_files()
     session.process_mft_file()
+    print('Done')
